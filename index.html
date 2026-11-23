@@ -24,7 +24,7 @@ canvas{position:fixed;inset:0;display:block;width:100vw;height:100vh}
 /* Abdunklung links und Vignette */
 #schleier{position:fixed;inset:0;pointer-events:none;
   background:
-    linear-gradient(90deg,rgba(5,6,15,.82) 0%,rgba(5,6,15,.45) 32%,rgba(5,6,15,0) 52%),
+    linear-gradient(90deg,rgba(5,6,15,.88) 0%,rgba(5,6,15,.6) 34%,rgba(5,6,15,0) 55%),
     radial-gradient(ellipse at 60% 50%,rgba(0,0,0,0) 45%,rgba(0,0,0,.65) 100%),
     linear-gradient(0deg,rgba(5,6,15,.85) 0%,rgba(5,6,15,0) 26%)}
 
@@ -43,11 +43,9 @@ canvas{position:fixed;inset:0;display:block;width:100vw;height:100vh}
   opacity:0;transform:translateX(-2vw);transition:opacity .8s,transform .8s cubic-bezier(.2,.8,.2,1),color 1s}
 .kicker::before{content:"";width:3.2vw;height:2px;background:currentColor;box-shadow:0 0 10px currentColor}
 .titel{font-weight:800;font-size:6.1vw;line-height:.94;letter-spacing:-.01em;margin-bottom:3vh;
-  filter:drop-shadow(0 0 2.2vw color-mix(in srgb,var(--farbe) 45%,transparent));perspective:900px}
+  color:#fff;text-shadow:0 .04em .25em rgba(0,0,0,.55);perspective:900px}
 .titel .wort{display:inline-block;white-space:nowrap}
 .titel .z{display:inline-block;opacity:0;transform:translateY(.5em) rotateX(-80deg) scale(1.2);filter:blur(10px);
-  background:linear-gradient(180deg,#fff 30%,color-mix(in srgb,var(--farbe) 70%,#fff) 100%);
-  -webkit-background-clip:text;background-clip:text;color:transparent;
   transition:opacity .9s,transform 1.1s cubic-bezier(.16,1,.3,1),filter .9s;transition-delay:calc(var(--i)*38ms)}
 .zeile{font-family:var(--f-kopf);font-weight:500;font-size:1.72vw;line-height:1.38;color:#c9d2e8;max-width:35vw;
   opacity:0;transform:translateY(1.5vh);transition:opacity 1s .55s,transform 1s .55s cubic-bezier(.2,.8,.2,1)}
@@ -137,7 +135,7 @@ const hex = c => '#' + new THREE.Color(c).getHexString();
 
 function hell(farbe, k = 1.6) { return new THREE.Color(farbe).multiplyScalar(k); }
 function neon(farbe, k = 2, opacity = 1) {
-  return new THREE.MeshBasicMaterial({ color: hell(farbe, Math.min(.35 + k * .4, 1.7)), transparent: true, opacity });
+  return new THREE.MeshBasicMaterial({ color: hell(farbe, Math.min(.35 + k * .3, 1.25)), transparent: true, opacity });
 }
 function fest(farbe, o = {}) {
   return new THREE.MeshStandardMaterial({
@@ -175,14 +173,14 @@ function schild(text, o = {}) {
     c.width = Math.ceil(w + pad * 2); c.height = Math.ceil(hh + pad * 2);
     g.font = `${gew} ${px}px ${fam}, sans-serif`;
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.shadowColor = farbe; g.shadowBlur = 28; g.fillStyle = farbe; g.strokeStyle = farbe;
+    g.shadowColor = farbe; g.shadowBlur = 10; g.fillStyle = farbe; g.strokeStyle = farbe;
     const cx = c.width / 2, cy = c.height / 2;
     if (bruch) {
       const [z, n] = t.split('/');
       g.fillText(z, cx, cy - px * .62); g.fillText(n, cx, cy + px * .66);
       g.lineWidth = 10; g.beginPath(); g.moveTo(cx - w / 2, cy); g.lineTo(cx + w / 2, cy); g.stroke();
     } else g.fillText(t, cx, cy + 4);
-    g.shadowBlur = 0; g.fillStyle = '#ffffff'; g.globalAlpha = .55;
+    g.shadowBlur = 0; g.fillStyle = '#ffffff'; g.globalAlpha = .7;
     if (!bruch) g.fillText(t, cx, cy + 4);
     g.globalAlpha = 1;
   };
@@ -239,7 +237,7 @@ function narr(h = 6) {
   }
   const lagen = 12, tiefe = h * .035;
   for (let i = lagen - 1; i >= 0; i--) {
-    const vorn = i === 0, hell = vorn ? 1.25 : .22 + .25 * (1 - i / lagen);
+    const vorn = i === 0, hell = vorn ? 1 : .22 + .25 * (1 - i / lagen);
     const m = new THREE.Mesh(ebene, new THREE.MeshBasicMaterial({
       map: tex.black, color: new THREE.Color(hell, hell * 1.04, hell * 1.12), transparent: true, depthWrite: false,
       side: THREE.DoubleSide, clippingPlanes: [schnitt], fog: false
@@ -278,19 +276,51 @@ welt.add(new THREE.HemisphereLight(0x9bb4ff, 0x10081a, .7));
 const sonne = new THREE.DirectionalLight(0xffffff, 1.4); sonne.position.set(6, 12, 8); welt.add(sonne);
 const farbLicht = new THREE.PointLight(0x22d3ee, 30, 0, 1.6); farbLicht.position.set(-4, 6, 6); welt.add(farbLicht);
 
-// Sterne
-{
-  const n = EINFACH ? 1200 : 3000, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
+// Sterne: runde Punkte statt Quadrate
+const sternTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  const v = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  v.addColorStop(0, 'rgba(255,255,255,1)'); v.addColorStop(.25, 'rgba(255,255,255,.85)'); v.addColorStop(.6, 'rgba(255,255,255,.12)'); v.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = v; g.fillRect(0, 0, 64, 64); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+function sternFarbe(c, i) {
+  const k = .55 + Math.random() * .75, w = Math.random();
+  c.set(w < .15 ? [k, k * .8, k * .6] : w < .4 ? [k * .7, k * .85, k] : [k, k, k], i * 3);
+}
+// Ferne Sternkugel, dreht sich langsam
+const sterneFern = (() => {
+  const n = EINFACH ? 2500 : 7000, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
-    const r = 70 + Math.random() * 160, th = Math.random() * Math.PI * 2, ph = Math.acos(Math.random() * 1.6 - .6);
-    p.set([r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph) * .7 + 10, r * Math.sin(ph) * Math.sin(th)], i * 3);
-    const k = .5 + Math.random() * .9, w = Math.random();
-    c.set([k * (w < .5 ? .7 : 1), k * .85, k], i * 3);
+    const r = 90 + Math.random() * 180, th = Math.random() * Math.PI * 2, ph = Math.acos(Math.random() * 2 - 1);
+    p.set([r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th)], i * 3);
+    sternFarbe(c, i);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(p, 3)); g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-  var sterne = new THREE.Points(g, new THREE.PointsMaterial({ size: .55, vertexColors: true, fog: false, transparent: true, opacity: .9 }));
-  welt.add(sterne);
+  const m = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.3, map: sternTex, vertexColors: true, fog: false, transparent: true, depthWrite: false, opacity: .95 }));
+  welt.add(m); return m;
+})();
+// Nahe Sterne, ziehen sichtbar vorbei (Flug durch den Raum)
+const STAUB = { n: EINFACH ? 600 : 1800, b: 160, h: 70 };
+const sterneNah = (() => {
+  const { n, b, h } = STAUB, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { p.set([(Math.random() - .5) * b, -6 + Math.random() * h, (Math.random() - .5) * b], i * 3); sternFarbe(c, i); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3)); g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  const m = new THREE.Points(g, new THREE.PointsMaterial({ size: .32, map: sternTex, vertexColors: true, fog: false, transparent: true, depthWrite: false, opacity: .9 }));
+  welt.add(m); return m;
+})();
+function sterneBewegen(dt, gt) {
+  sterneFern.rotation.y = gt * .022; sterneFern.rotation.x = Math.sin(gt * .05) * .08;
+  const a = sterneNah.geometry.attributes.position, { b } = STAUB, v = 7 * dt, w = gt * .07;
+  const dx = Math.sin(w) * v, dz = Math.cos(w) * v;  // Flugrichtung dreht sich langsam
+  for (let i = 0; i < a.count; i++) {
+    let x = a.getX(i) + dx, z = a.getZ(i) + dz;
+    if (x > b / 2) x -= b; else if (x < -b / 2) x += b;
+    if (z > b / 2) z -= b; else if (z < -b / 2) z += b;
+    a.setX(i, x); a.setZ(i, z);
+  }
+  a.needsUpdate = true;
 }
 // Leuchtgitter am Boden
 const gitterMat = new THREE.ShaderMaterial({
@@ -313,7 +343,7 @@ gitter.rotation.x = -Math.PI / 2; gitter.position.y = -4.2; welt.add(gitter);
 // Nachbearbeitung
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(welt, kamera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .62, .45, .32);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .38, .35, .5);
 if (!EINFACH) composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
@@ -465,7 +495,7 @@ const SZENEN = [
           kipp.rotation.y = t * .25;
           const s = g.userData.s; s.scale.multiplyScalar(1);
         },
-        kam(t) { return [new V(Math.sin(t * .04) * 3, 7.5, 10.5), new V(0, .4, 0)]; }
+        kam(t) { return [new V(Math.sin(t * .04) * 3, 8.6, 12.8), new V(0, .6, 0)]; }
       };
     }
   },
@@ -935,7 +965,7 @@ function schleife() {
   kamera.position.lerp(kp, k); blick.lerp(kb, k); kamera.lookAt(blick);
   if (Math.abs(versatz - versatzZiel) > .0005) { versatz = lerp(versatz, versatzZiel, k); blickfeld(); }
   gitterMat.uniforms.uT.value = gt;
-  sterne.rotation.y = gt * .006;
+  sterneBewegen(dt, gt);
   farbLicht.position.set(Math.sin(gt * .3) * 6, 6, 6);
   composer.render();
   if (t >= s.dauer) starte(nr + 1);
