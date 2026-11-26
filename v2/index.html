@@ -779,20 +779,23 @@ const SZENEN = [
       const fx = schild('f', { farbe: '#d9f99d', groesse: .7, mono: true }); root.add(fx);
       return {
         update(t) {
-          const m = Math.round((.9 + 1.1 * Math.sin(t * .55 - .6)) * 10) / 10 || .1;
-          const b = Math.round((1 + 1.2 * Math.sin(t * .37 + 1.2)) * 10) / 10;
+          // Die Gerade bewegt sich stufenlos; nur die angezeigten Zahlen sind auf 0,1 gerundet
+          let m = .9 + 1.1 * Math.sin(t * .55 - .6);
+          if (Math.abs(m) < .01) m = m < 0 ? -.01 : .01;
+          const b = 1 + 1.2 * Math.sin(t * .37 + 1.2);
+          const mR = Math.round(m * 10) / 10, bR = Math.round(b * 10) / 10;
           const f = x => m * x + b;
           let x1 = -6.3, x2 = 6.3;
           const xa = (-3 - b) / m, xb = (5.4 - b) / m; x1 = Math.max(x1, Math.min(xa, xb)); x2 = Math.min(x2, Math.max(xa, xb));
           const z = glatt(.5, 2.2, t);
           strecke(gerade, new V(x1, f(x1), 0), new V(lerp(x1, x2, z), f(lerp(x1, x2, z)), 0));
           const x0 = 1; strecke(waag, new V(x0, f(x0), 0), new V(x0 + 1, f(x0), 0)); strecke(senk, new V(x0 + 1, f(x0), 0), new V(x0 + 1, f(x0 + 1), 0));
-          l1.position.set(x0 + .5, f(x0) - .38 * Math.sign(m), 0); lm.position.set(x0 + 1.45, f(x0) + m / 2, 0);
+          l1.position.set(x0 + .5, f(x0) - .38 * clamp(m * 4, -1, 1), 0); lm.position.set(x0 + 1.45, f(x0) + m / 2, 0);
           pb.position.set(0, b, 0); lb.position.set(-.45, b + .1, 0);
           fx.position.set(x2 * .78, f(x2 * .78) + .65, 0);
           const vis = glatt(2, 3, t); [waag, senk, l1, lm].forEach(o => o.material.userData.base = vis);
-          ctx.formel(`f(x) = ${zahl(m)} · x ${b < 0 ? '−' : '+'} ${zahl(Math.abs(b))}`);
-          ctx.zusatz(`Steigung m = ${zahl(m)}   ·   y-Achsenabschnitt b = ${zahl(b)}`);
+          ctx.formel(`f(x) = ${zahl(mR)} · x ${bR < 0 ? '−' : '+'} ${zahl(Math.abs(bR))}`);
+          ctx.zusatz(`Steigung m = ${zahl(mR)}   ·   y-Achsenabschnitt b = ${zahl(bR)}`);
         },
         kam(t) { const w = .45 * Math.sin(t * .22) + .15; return [new V(Math.sin(w) * 14, 2.4, Math.cos(w) * 14), new V(.3, 1.1, 0)]; }
       };
