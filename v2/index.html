@@ -94,6 +94,10 @@ canvas{position:fixed;inset:0;display:block;width:100vw;height:100vh}
 .st .voll{height:100%;width:0;border-radius:4px;background:var(--farbe)}
 .st.fertig{color:#9aa6c4}.st.fertig .voll{width:100%;opacity:.5}
 
+/* Sparsame Stufe: keine Unschärfe-Filter beim Ein- und Ausblenden (kosten auf schwacher Grafik viel) */
+.leicht .titel .z,.leicht #stufe{filter:none!important}
+.leicht .titel{text-shadow:none}
+#fps{position:fixed;right:1vw;bottom:.6vh;z-index:7;font:500 12px var(--f-mono);color:#9aa6c4;background:rgba(0,0,0,.6);padding:.3em .6em;border-radius:6px}
 #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:5;
   font-family:var(--f-mono);font-size:1.1vw;letter-spacing:.2em;text-transform:uppercase;color:var(--leise);transition:opacity 1.2s}
 #start.aus{opacity:0;pointer-events:none}
@@ -162,6 +166,24 @@ const EINFACH = P.has('einfach');
 // V2: helles Papier, alle Grafiken wie mit Bleistift und Buntstift gezeichnet (build.py setzt window.MATHE_V2)
 const V2 = window.MATHE_V2 === true;
 if (V2) document.body.classList.add('v2');
+
+// ---------- Leistungsstufen ----------
+// 0 = voll (Kantenglättung im Zwischenbild, Lichtschein), 1 = mittel (ohne Kantenglättung),
+// 2 = sparsam (direkt auf den Bildschirm ohne Nachbearbeitung, etwas geringere Auflösung, weniger Sterne).
+// Schwache Geräte (Android-Displays, Mali/Adreno/PowerVR-Grafik, wenig Kerne) starten in Stufe 2.
+// Läuft es trotzdem langsam, schaltet die Seite selbst eine Stufe herunter. ?qualitaet=0|1|2 legt sie fest.
+const STUFEN = [
+  { pr: 1.5, msaa: 4, bloom: true, nach: true, sterne: 1, welle: 90, narr: 12, kugel: [14, 10] },
+  { pr: 1, msaa: 0, bloom: true, nach: true, sterne: .6, welle: 70, narr: 8, kugel: [10, 8] },
+  { pr: .85, msaa: 0, bloom: false, nach: false, sterne: .4, welle: 52, narr: 4, kugel: [8, 6] },
+];
+const GPU = (() => { try { const gl = document.createElement('canvas').getContext('webgl'), e = gl.getExtension('WEBGL_debug_renderer_info'); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; } catch (e) { return ''; } })();
+const SCHWACH = /Android|Mobile|CrOS|armv|aarch64/i.test(navigator.userAgent) || /Mali|Adreno|PowerVR|Vivante|VideoCore|SwiftShader|llvmpipe/i.test(GPU)
+  || (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 3;
+const QFEST = P.has('qualitaet') || EINFACH;
+let QS = P.has('qualitaet') ? Math.min(2, Math.max(0, parseInt(P.get('qualitaet')) || 0)) : EINFACH || SCHWACH ? 2 : 0;
+let Q = STUFEN[QS];
+if (QS >= 2) document.body.classList.add('leicht');
 const V = THREE.Vector3;
 
 // ---------- Hilfen ----------
@@ -178,7 +200,17 @@ function hell(farbe, k = 1.6) { return new THREE.Color(farbe).multiplyScalar(k);
 function neon(farbe, k = 2, opacity = 1) {
   return new THREE.MeshBasicMaterial({ color: hell(farbe, Math.min(.35 + k * .3, 1.25)), transparent: true, opacity });
 }
+// Glänzendes Material, in der sparsamen Stufe einfaches Lambert-Licht (gleiche Farben, ohne Spiegelungen)
+function glanz(p) {
+  if (QS < 2) return new THREE.MeshStandardMaterial(p);
+  const { metalness, roughness, envMapIntensity, ...rest } = p;
+  return new THREE.MeshLambertMaterial(rest);
+}
 function fest(farbe, o = {}) {
+  // Sparsame Stufe: einfaches Licht statt physikalischem Material mit Spiegelungen (halbiert dort die Rechenzeit)
+  if (QS >= 2 || o.matt) return new THREE.MeshLambertMaterial({
+    color: farbe, emissive: farbe, emissiveIntensity: (o.glut ?? .35) * .5, transparent: true, opacity: o.opacity ?? 1, side: o.seite ?? THREE.FrontSide
+  });
   return new THREE.MeshStandardMaterial({
     color: farbe, emissive: farbe, emissiveIntensity: (o.glut ?? .35) * .38, roughness: o.rau ?? .28,
     metalness: o.metall ?? .22, envMapIntensity: .85, transparent: true, opacity: o.opacity ?? 1, side: o.seite ?? THREE.FrontSide
@@ -204,6 +236,8 @@ function strecke(m, a, b) {
 // Schrift-Sprite. Mit bruch:true wird "3/4" als Bruch gesetzt.
 function schild(text, o = {}) {
   const farbe = V2 ? tinte(o.farbe || '#333333', .3) : (o.farbe || '#ffffff'), h = o.groesse || .6, gew = o.gewicht || 800;
+  // platte: Schrift in Weiß (V2: dunkel) auf ruhigem Schild mit farbigem Rand, lesbar auch vor gleichfarbigen Körpern
+  const platte = !!o.platte, schrift = platte ? (V2 ? '#1b2230' : '#ffffff') : farbe;
   const fam = o.mono ? '"Plex Mono"' : '"Archivo"';
   const c = document.createElement('canvas'), g = c.getContext('2d');
   const px = 120, pad = 40;
@@ -216,15 +250,20 @@ function schild(text, o = {}) {
     c.width = Math.ceil(w + pad * 2); c.height = Math.ceil(hh + pad * 2);
     g.font = `${gew} ${px}px ${fam}, sans-serif`;
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.shadowColor = farbe; g.shadowBlur = V2 ? 0 : 10; g.fillStyle = farbe; g.strokeStyle = farbe;
     const cx = c.width / 2, cy = c.height / 2;
+    if (platte) {
+      const r = 34; g.beginPath(); g.roundRect(8, 8, c.width - 16, c.height - 16, r);
+      g.fillStyle = V2 ? 'rgba(255,255,255,.92)' : 'rgba(7,9,22,.86)'; g.fill();
+      g.lineWidth = 7; g.strokeStyle = farbe; g.stroke();
+    }
+    g.shadowColor = farbe; g.shadowBlur = V2 || platte ? 0 : 10; g.fillStyle = schrift; g.strokeStyle = schrift;
     if (bruch) {
       const [z, n] = t.split('/');
       g.fillText(z, cx, cy - px * .62); g.fillText(n, cx, cy + px * .66);
       g.lineWidth = 10; g.beginPath(); g.moveTo(cx - w / 2, cy); g.lineTo(cx + w / 2, cy); g.stroke();
     } else g.fillText(t, cx, cy + 4);
     g.shadowBlur = 0; g.fillStyle = '#ffffff'; g.globalAlpha = .7;
-    if (!bruch && !V2) g.fillText(t, cx, cy + 4);
+    if (!bruch && !V2 && !platte) g.fillText(t, cx, cy + 4);
     g.globalAlpha = 1;
   };
   zeichne(text);
@@ -299,7 +338,7 @@ function narr(h = 6) {
     m.position.set(-(mx - 241) * s, -(270 - my) * s, 0); m.userData.geteilt = true; m.userData.narr = true;
     drehpunkt.add(m); g.add(drehpunkt); g.userData.teile[teil] = drehpunkt;
   }
-  const lagen = 12, tiefe = h * .035;
+  const lagen = Q.narr, tiefe = h * .035;
   for (let i = lagen - 1; i >= 0; i--) {
     const vorn = i === 0, hell = V2 ? (vorn ? .08 : .84 + .1 * (i / lagen)) : vorn ? 1 : .22 + .25 * (1 - i / lagen);
     const m = new THREE.Mesh(ebene, new THREE.MeshBasicMaterial({
@@ -321,8 +360,8 @@ function narrSvg(klasse) {
 }
 
 // ---------- Renderer, Welt ----------
-const renderer = new THREE.WebGLRenderer({ antialias: EINFACH, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, EINFACH ? 1 : 2));
+const renderer = new THREE.WebGLRenderer({ antialias: QS >= 2, powerPreference: 'high-performance' });  // ohne Nachbearbeitung: Kantenglättung des Bildschirms (auf Mobilgrafik fast kostenlos)
+renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = V2 ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
@@ -355,7 +394,7 @@ function sternFarbe(c, i) {
 }
 // Ferne Sternkugel, dreht sich langsam
 const sterneFern = (() => {
-  const n = EINFACH ? 2500 : 7000, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
+  const n = Math.round(7000 * Q.sterne), p = new Float32Array(n * 3), c = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const r = 90 + Math.random() * 180, th = Math.random() * Math.PI * 2, ph = Math.acos(Math.random() * 2 - 1);
     p.set([r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th)], i * 3);
@@ -367,37 +406,39 @@ const sterneFern = (() => {
   welt.add(m); return m;
 })();
 // Nahe Sterne, ziehen sichtbar vorbei (Flug durch den Raum)
-const STAUB = { n: EINFACH ? 600 : 1800, b: 160, h: 70 };
+const STAUB = { n: Math.round(1800 * Q.sterne), b: 160, h: 70 };
+// Verschiebung der nahen Sterne läuft auf der Grafikkarte (vorher 1800 Punkte pro Bild im Hauptprogramm)
+const staubVersatz = { value: new THREE.Vector2() };
 const sterneNah = (() => {
   const { n, b, h } = STAUB, p = new Float32Array(n * 3), c = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) { p.set([(Math.random() - .5) * b, -6 + Math.random() * h, (Math.random() - .5) * b], i * 3); sternFarbe(c, i); }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(p, 3)); g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-  const m = new THREE.Points(g, new THREE.PointsMaterial({ size: .32, map: sternTex, vertexColors: true, fog: false, transparent: true, depthWrite: false, opacity: .9 }));
+  const mat = new THREE.PointsMaterial({ size: .32, map: sternTex, vertexColors: true, fog: false, transparent: true, depthWrite: false, opacity: .9 });
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uVersatz = staubVersatz;
+    sh.vertexShader = 'uniform vec2 uVersatz;\n' + sh.vertexShader.replace('#include <begin_vertex>',
+      `#include <begin_vertex>\n  transformed.xz = mod(transformed.xz + uVersatz + ${b / 2}.0, ${b}.0) - ${b / 2}.0;`);
+  };
+  const m = new THREE.Points(g, mat); m.frustumCulled = false;
   welt.add(m); return m;
 })();
 function sterneBewegen(dt, gt) {
   sterneFern.rotation.y = gt * .022; sterneFern.rotation.x = Math.sin(gt * .05) * .08;
-  const a = sterneNah.geometry.attributes.position, { b } = STAUB, v = 7 * dt, w = gt * .07;
-  const dx = Math.sin(w) * v, dz = Math.cos(w) * v;  // Flugrichtung dreht sich langsam
-  for (let i = 0; i < a.count; i++) {
-    let x = a.getX(i) + dx, z = a.getZ(i) + dz;
-    if (x > b / 2) x -= b; else if (x < -b / 2) x += b;
-    if (z > b / 2) z -= b; else if (z < -b / 2) z += b;
-    a.setX(i, x); a.setZ(i, z);
-  }
-  a.needsUpdate = true;
+  const v = 7 * dt, w = gt * .07;  // Flugrichtung dreht sich langsam
+  staubVersatz.value.x = (staubVersatz.value.x + Math.sin(w) * v) % STAUB.b;
+  staubVersatz.value.y = (staubVersatz.value.y + Math.cos(w) * v) % STAUB.b;
 }
 if (V2) { sterneFern.visible = false; sterneNah.visible = false; }
 // Leuchtgitter am Boden
 const gitterMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  uniforms: { uFarbe: { value: new THREE.Color(0x22d3ee) }, uT: { value: 0 } },
+  uniforms: { uFarbe: { value: new THREE.Color(0x22d3ee) }, uT: { value: 0 }, uFein: { value: QS < 2 ? 1 : 0 } },
   vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix*vec4(position,1.); vW = w.xyz; gl_Position = projectionMatrix*viewMatrix*w; }`,
-  fragmentShader: `uniform vec3 uFarbe; uniform float uT; varying vec3 vW;
+  fragmentShader: `uniform vec3 uFarbe; uniform float uT, uFein; varying vec3 vW;
     float netz(vec2 g){ vec2 a = abs(fract(g-.5)-.5)/fwidth(g); return 1.-min(min(a.x,a.y),1.); }
     void main(){
-      float l1 = netz(vW.xz/2. + vec2(0., uT*.5));
+      float l1 = uFein > .5 ? netz(vW.xz/2. + vec2(0., uT*.5)) : 0.;  // feines Raster nur in Stufe 0 und 1
       float l2 = netz(vW.xz/10. + vec2(0., uT*.1));
       float d = length(vW.xz - cameraPosition.xz);
       float f = exp(-d*.03);
@@ -407,14 +448,17 @@ const gitterMat = new THREE.ShaderMaterial({
 const gitter = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), gitterMat);
 gitter.rotation.x = -Math.PI / 2; gitter.position.y = -4.2; welt.add(gitter);
 if (V2) gitter.visible = false;  // auf Papier reicht das Karomuster
+// Sparsame Stufe: Boden aus echten Linien statt Raster-Shader auf der ganzen Fläche (kostet nur dort, wo Linien sind)
+const gitterLinien = new THREE.GridHelper(320, 32, 0x22d3ee, 0x22d3ee);
+gitterLinien.material.transparent = true; gitterLinien.material.opacity = .55; gitterLinien.position.y = -4.2; welt.add(gitterLinien);
+function bodenNachStufe() { const sparsam = QS >= 2 && !V2; gitter.visible = !sparsam && !V2; gitterLinien.visible = sparsam; }
+bodenNachStufe();
 
 // Nachbearbeitung
-// Kantenglättung (MSAA) im Zwischenbild: ohne sie sind schräge Linien treppig
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: EINFACH ? 0 : 4 }));
 // Umgebungslicht für glänzende Körper (Spiegelungen statt flacher Farbe)
 welt.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture;
 welt.environmentIntensity = V2 ? 0 : .55;
-composer.addPass(new RenderPass(welt, kamera));
+const umgebung = welt.environment; if (QS >= 2) welt.environment = null;
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), .38, .35, .5);
 // V2: Zeichenfilter. Die Szene wird wie gewohnt (hell auf Schwarz) gerendert; der Filter
 // macht daraus Bleistiftkanten, Buntstift-Schraffur und leichte Farbe auf kariertem Papier.
@@ -473,9 +517,28 @@ class Ebene1Pass extends Pass {
     welt.background = bg; welt.fog = fog;
   }
 }
-if (V2) { composer.addPass(skizze); composer.addPass(new Ebene1Pass()); }
-else if (!EINFACH) composer.addPass(bloom);
-composer.addPass(new OutputPass());
+const renderPass = new RenderPass(welt, kamera), ebene1 = new Ebene1Pass(), ausgabe = new OutputPass();
+// Kantenglättung (MSAA) im Zwischenbild nur in Stufe 0: ohne sie sind schräge Linien treppig, sie kostet aber Grafikleistung
+let composer = null;
+function baueComposer() {
+  if (composer) { composer.renderTarget1.dispose(); composer.renderTarget2.dispose(); }
+  composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: Q.msaa }));
+  composer.addPass(renderPass);
+  if (V2) { composer.addPass(skizze); composer.addPass(ebene1); }
+  else if (Q.bloom) composer.addPass(bloom);
+  composer.addPass(ausgabe);
+}
+baueComposer();
+function setzeStufe(n) {
+  QS = n; Q = STUFEN[n];
+  if (n >= 2) { welt.environment = null; gitterMat.uniforms.uFein.value = 0; }
+  bodenNachStufe();  // neue Szenen bekommen ab jetzt einfaches Material
+  document.body.classList.toggle('leicht', n >= 2);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, Q.pr));
+  baueComposer(); groesse();
+  sterneFern.geometry.setDrawRange(0, Math.round(sterneFern.geometry.attributes.position.count * Q.sterne / STUFEN[0].sterne));
+  sterneNah.geometry.setDrawRange(0, Math.round(sterneNah.geometry.attributes.position.count * Q.sterne / STUFEN[0].sterne));
+}
 
 let versatz = .16, versatzZiel = .16;
 function blickfeld() {
@@ -498,14 +561,34 @@ const SZENEN = [
     kicker: 'Tag der offenen Tür', titel: 'Mathematik am PKG',
     zeile: 'Ein Rundflug durch unseren Lehrplan, von Klasse 5 bis zum Abitur.', formel: '',
     bau(root) {
-      const N = V2 ? 46 : EINFACH ? 60 : 90, S = 44;
+      // Wellenfläche: Höhe und Farbe rechnet der Shader (vorher 8 000 Punkte pro Bild im Hauptprogramm)
+      const N = V2 ? 46 : Q.welle, S = 44;
       const geo = new THREE.PlaneGeometry(S, S, N, N); geo.rotateX(-Math.PI / 2);
-      const pos = geo.attributes.position, basis = Float32Array.from(pos.array);
-      const fa = new Float32Array(pos.count * 3); geo.setAttribute('color', new THREE.BufferAttribute(fa, 3));
-      const netz = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, wireframe: true, transparent: true, opacity: .5 }));
-      const punkte = new THREE.Points(geo, new THREE.PointsMaterial({ size: .09, vertexColors: true, transparent: true }));
+      const welle = (punkte) => new THREE.ShaderMaterial({
+        transparent: true, wireframe: !punkte, depthWrite: false,
+        uniforms: { uT: { value: 0 }, uA: { value: new THREE.Color(0x22d3ee).multiplyScalar(1.5) }, uB: { value: new THREE.Color(0xf472b6).multiplyScalar(1.7) },
+          uOp: { value: 1 }, uPx: { value: .09 * innerHeight * renderer.getPixelRatio() / 2 } },
+        vertexShader: `uniform float uT, uPx; uniform vec3 uA, uB; varying vec3 vC; varying float vNebel;
+          void main(){
+            vec3 p = position; float r = length(vec2(p.x, p.z + 4.));
+            p.y = 1.7 * sin(r * .55 - uT * 1.7) * exp(-r * .055) + .55 * sin(p.x * .3 + uT * .7) * cos(p.z * .25 - uT * .5);
+            vC = mix(uA, uB, clamp(p.y * .45 + .5, 0., 1.));
+            vec4 mv = modelViewMatrix * vec4(p, 1.); gl_Position = projectionMatrix * mv;
+            float d = -mv.z; vNebel = exp(-.016 * .016 * d * d);
+            gl_PointSize = uPx / d;
+          }`,
+        fragmentShader: `uniform float uOp; varying vec3 vC; varying float vNebel;
+          void main(){
+            ${punkte ? 'if (length(gl_PointCoord - .5) > .5) discard;' : ''}
+            gl_FragColor = vec4(vC * vNebel, uOp);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+          }`
+      });
+      const netzMat = welle(false), punktMat = welle(true);
+      netzMat.opacity = .5;
+      const netz = new THREE.Mesh(geo, netzMat), punkte = new THREE.Points(geo, punktMat);
       netz.position.y = punkte.position.y = -1.5; root.add(netz, punkte);
-      const a = new THREE.Color(0x22d3ee).multiplyScalar(1.5), b = new THREE.Color(0xf472b6).multiplyScalar(1.7), c = new THREE.Color();
       const formeln = ['a² + b² = c²', 'π', 'f′(x)', '∫ f(x) dx', 'e', 'sin(x)', '¾', 'y = mx + b', 'P(A)', '√2', 'aⁿ · aᵐ', '∞', 'Δx', 'σ'];
       const schwebe = formeln.map((t, i) => {
         const s = schild(t, { farbe: hex([0x22d3ee, 0xf472b6, 0xfbbf24, 0xa78bfa][i % 4]), groesse: .7 + (i % 3) * .25 });
@@ -529,13 +612,7 @@ const SZENEN = [
             const k = clamp((t - s0) / .7), sp = k < 1 ? 1 + Math.sin(k * Math.PI) * .25 : 1;
             m.scale.setScalar(Math.max(k * sp, .0001));
           });
-          for (let i = 0; i < pos.count; i++) {
-            const x = basis[i * 3], z = basis[i * 3 + 2], r = Math.hypot(x, z + 4);
-            const y = 1.7 * Math.sin(r * .55 - t * 1.7) * Math.exp(-r * .055) + .55 * Math.sin(x * .3 + t * .7) * Math.cos(z * .25 - t * .5);
-            pos.setY(i, y);
-            c.copy(a).lerp(b, clamp(y * .45 + .5)); fa[i * 3] = c.r; fa[i * 3 + 1] = c.g; fa[i * 3 + 2] = c.b;
-          }
-          pos.needsUpdate = true; geo.attributes.color.needsUpdate = true;
+          for (const m of [netzMat, punktMat]) { m.uniforms.uT.value = t; m.uniforms.uOp.value = m.opacity; }
           for (const s of schwebe) { s.position.copy(s.userData.p); const y = (s.userData.p.y + t * s.userData.v) % 6.5; s.position.y = y - 1; s.material.userData.base = glatt(0, 1, y) * (1 - glatt(5, 6.5, y)); }
         },
         kam(t) { const w = .5 + t * .09; return [new V(Math.sin(w) * 17, 5.5 + Math.sin(t * .3), Math.cos(w) * 17), new V(0, 0, 0)]; }
@@ -553,7 +630,7 @@ const SZENEN = [
       const flaeche = (i) => {
         const g = new THREE.Group();
         const p = new THREE.Mesh(new THREE.PlaneGeometry(1.96, 1.96).rotateX(-Math.PI / 2),
-          new THREE.MeshStandardMaterial({ color: farben[i], emissive: farben[i], emissiveIntensity: .22, transparent: true, opacity: .34, side: THREE.DoubleSide, depthWrite: false }));
+          glanz({ color: farben[i], emissive: farben[i], emissiveIntensity: .22, transparent: true, opacity: .34, side: THREE.DoubleSide, depthWrite: false }));
         g.add(p, rahmen(2, .035, neon(farben[i], 2.4))); return g;
       };
       const wuerfel = new THREE.Group(); root.add(wuerfel); wuerfel.position.z = .5;
@@ -594,19 +671,19 @@ const SZENEN = [
       const sets = [1, 2, 4, 8].map(n => {
         const g = new THREE.Group(); g.visible = false; kipp.add(g);
         for (let k = 0; k < n; k++) {
-          const farbe = new THREE.Color().setHSL(.1 - k * .012 + (n === 8 ? (k % 2) * .03 : 0), .95, .5);
+          const farbe = new THREE.Color().setHSL(.095 - k * .012 + (n === 8 ? (k % 2) * .03 : 0), 1, .3);
           const geo = new THREE.CylinderGeometry(3, 3, .55, Math.max(12, 72 / n), 1, false, k * Math.PI * 2 / n, Math.PI * 2 / n - .0001);
-          const m = new THREE.Mesh(geo, fest(farbe, { glut: .35, rau: .55 }));
+          const m = new THREE.Mesh(geo, fest(farbe, { glut: .12, matt: true }));
           const kanten = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), new THREE.LineBasicMaterial({ color: hell(0xfff1c1, 1.1), transparent: true }));
           const teil = new THREE.Group(); teil.add(m, kanten);
           const mitte = (k + .5) * Math.PI * 2 / n; teil.userData.d = new V(Math.sin(mitte), 0, Math.cos(mitte));
           g.add(teil);
         }
         const name = n === 1 ? '1' : '1/' + n;
-        const s = schild(name, { farbe: '#fde68a', groesse: n === 1 ? 1.1 : 1.7, bruch: n > 1 }); s.position.set(0, 2.9, 0); g.add(s); g.userData.s = s;
+        const s = schild(name, { farbe: '#fbbf24', groesse: n === 1 ? 1.1 : 1.8, bruch: n > 1, platte: true }); s.position.set(0, 3.7, 0); g.add(s); g.userData.s = s;
         return g;
       });
-      const drei = schild('3/4', { farbe: '#fde68a', groesse: 1.8, bruch: true }); drei.position.set(0, 3.4, 0); drei.visible = false; kipp.add(drei);
+      const drei = schild('3/4', { farbe: '#fbbf24', groesse: 1.9, bruch: true, platte: true }); drei.position.set(0, 3.9, 0); drei.visible = false; kipp.add(drei);
       return {
         update(t) {
           const st = t < 12.6 ? Math.min(3, Math.floor(t / 3.15)) : 2, lt = t < 12.6 ? t - st * 3.15 : t - 12.6;
@@ -647,7 +724,7 @@ const SZENEN = [
         const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
       };
       const tex = [1, 2, 3, 4, 5, 6].map(augen);
-      const mats = [tex[0], tex[5], tex[1], tex[4], tex[2], tex[3]].map(m => new THREE.MeshStandardMaterial({ map: m, emissive: 0xffffff, emissiveMap: m, emissiveIntensity: .8, transparent: true }));
+      const mats = [tex[0], tex[5], tex[1], tex[4], tex[2], tex[3]].map(m => glanz({ map: m, emissive: 0xffffff, emissiveMap: m, emissiveIntensity: .8, transparent: true }));
       const wuerfel = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.3, 1.3), mats); wuerfel.position.set(0, 5.6, -1.5); root.add(wuerfel);
       const saeulen = [], zaehler = [0, 0, 0, 0, 0, 0];
       for (let k = 0; k < 6; k++) {
@@ -658,7 +735,7 @@ const SZENEN = [
       }
       const H = 3; // Höhe für ein Sechstel
       const linie = new THREE.Mesh(new THREE.BoxGeometry(8.6, .05, .05), neon(0xffffff, 2.5)); linie.position.y = H; root.add(linie);
-      const l6 = schild('1/6', { farbe: '#fbcfe8', groesse: 1.1, bruch: true }); l6.position.set(4.9, H + .1, .3); root.add(l6);
+      const l6 = schild('1/6', { farbe: '#f472b6', groesse: 1.2, bruch: true, platte: true }); l6.position.set(4.9, H + .1, .3); root.add(l6);
       const boden = new THREE.Mesh(new THREE.BoxGeometry(8.8, .08, 1.6), neon(0xf472b6, 1.2, .5)); boden.position.y = -.04; root.add(boden);
       let n = 0, rest = 0, dreh = new V(1, 1, 1);
       return {
@@ -882,7 +959,7 @@ const SZENEN = [
       const flaeche = new THREE.Mesh(new THREE.ShapeGeometry(form), new THREE.MeshBasicMaterial({ color: hell(0x3b82f6, 1.4), transparent: true, opacity: .6, side: THREE.DoubleSide, depthWrite: false })); root.add(flaeche);
       const lp = []; for (let i = 0; i <= 80; i++) { const x = 6 * i / 80; lp.push(new THREE.Vector2(f(x), X(x))); }
       const SEG = 96, lgeo = new THREE.LatheGeometry(lp, SEG);
-      const koerper = new THREE.Mesh(lgeo, new THREE.MeshStandardMaterial({ color: 0x60a5fa, emissive: 0x1d4ed8, emissiveIntensity: .5, metalness: .6, roughness: .25, transparent: true, opacity: .8, side: THREE.DoubleSide }));
+      const koerper = new THREE.Mesh(lgeo, glanz({ color: 0x60a5fa, emissive: 0x1d4ed8, emissiveIntensity: .5, metalness: .6, roughness: .25, transparent: true, opacity: .8, side: THREE.DoubleSide }));
       const draht = new THREE.Mesh(lgeo, new THREE.MeshBasicMaterial({ color: hell(0x93c5fd, 1.2), wireframe: true, transparent: true, opacity: .14 }));
       const drehung = new THREE.Group(); drehung.rotation.z = -Math.PI / 2; drehung.add(koerper, draht); root.add(drehung);
       const M = new THREE.Matrix4(), stufen = [4, 8, 16, 32, 64];
@@ -936,7 +1013,7 @@ const SZENEN = [
       const tr1 = stab(.03, wandMat), tr2 = stab(.03, wandMat); strecke(tr1, new V(-1.1, TOP + 1.2, 0), new V(-.2, TOP + .3, 0)); strecke(tr2, new V(1.1, TOP + 1.2, 0), new V(.2, TOP + .3, 0)); root.add(tr1, tr2);
       const glas = tafel(DX * (R + 1) + .8, TOP - BODEN + 2, 0xfb7185, .22);
       glas.position.set(0, (TOP + BODEN) / 2 + .4, -.2); root.add(glas);
-      const kugeln = new THREE.InstancedMesh(new THREE.SphereGeometry(D / 2, 14, 10), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: .18, roughness: .4, metalness: .2, transparent: true }), N);
+      const kugeln = new THREE.InstancedMesh(new THREE.SphereGeometry(D / 2, ...Q.kugel), glanz({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: .18, roughness: .4, metalness: .2, transparent: true }), N);
       const farbe = new THREE.Color();
       const bahn = [];
       for (let i = 0; i < N; i++) {
@@ -1065,7 +1142,7 @@ function starte(i) {
   aktiv = { s, root, ...s.bau(root, ctx) };
   t = 0; weggeblendet = false;
   versatzZiel = s.versatz ?? .17;
-  gitterMat.uniforms.uFarbe.value.set(s.farbe);
+  gitterMat.uniforms.uFarbe.value.set(s.farbe); gitterLinien.material.color.set(s.farbe).multiplyScalar(.6);
   farbLicht.color.set(s.farbe);
   zeigeText(s);
   if (V2) root.traverse(o => { if (o.isSprite || o.userData.narr) o.layers.set(1); });
@@ -1097,11 +1174,25 @@ function schleife() {
   const k = 1 - Math.exp(-dt * 2.2);
   kamera.position.lerp(kp, k); blick.lerp(kb, k); kamera.lookAt(blick);
   if (Math.abs(versatz - versatzZiel) > .0005) { versatz = lerp(versatz, versatzZiel, k); blickfeld(); }
-  gitterMat.uniforms.uT.value = gt; skizze.uniforms.uT.value = gt;
+  gitterMat.uniforms.uT.value = gt; gitterLinien.position.z = (gt * 1) % 10; skizze.uniforms.uT.value = gt;
   sterneBewegen(dt, gt);
   farbLicht.position.set(Math.sin(gt * .3) * 6, 6, 6);
-  composer.render();
+  if (V2 || Q.nach) composer.render(); else renderer.render(welt, kamera);
+  messen(dt);
   if (t >= s.dauer) starte(nr + 1);
+}
+
+// Bildrate messen: unter 42 Bildern pro Sekunde eine Stufe herunter (höchstens alle 6 s, nie wieder hinauf)
+let mSumme = 0, mN = 0, letzteSenkung = 0;
+const fpsAnzeige = P.has('fps') ? Object.assign(document.createElement('div'), { id: 'fps' }) : null;
+if (fpsAnzeige) document.body.append(fpsAnzeige);
+if (fpsAnzeige) window.__pruef = { welt, gitter, sterneFern, sterneNah, renderer, aktiv: () => aktiv };
+function messen(dt) {
+  mSumme += dt; mN++;
+  if (mN < 90) return;
+  const fps = mN / mSumme; mSumme = mN = 0;
+  if (fpsAnzeige) fpsAnzeige.textContent = `${fps.toFixed(0)} fps · Stufe ${QS}${SCHWACH ? ' · schwach erkannt' : ''}`;
+  if (!QFEST && fps < 42 && QS < 2 && gt > 5 && gt - letzteSenkung > 6) { letzteSenkung = gt; setzeStufe(QS + 1); }
 }
 
 // ---------- Bedienung ----------
